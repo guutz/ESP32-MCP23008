@@ -43,16 +43,21 @@ static const char *TAG = "MCP23008" ;
 static esp_err_t mcp23008_read_reg ( mcp23008_t *mcp, uint8_t reg, uint8_t *d )
 {
     CHECK_ARG (mcp) ;
-    esp_err_t ret = i2c_manager_read ( mcp -> port, mcp -> address, reg, &d, 1 ) ;
+    // The i2c_manager_read function expects a pointer to a buffer (uint8_t *buffer).
+    // 'd' is already a uint8_t*, so we pass 'd' directly.
+    esp_err_t ret = i2c_manager_read ( mcp -> port, mcp -> address, reg, d, 1 ) ;
     
 	if ( ret != ESP_OK ) 
 	{
-        ESP_LOGE ( TAG, "Error reading register %d", reg ) ;
-        return ESP_FAIL ;
-    }
-    vTaskDelay ( 30 / portTICK_RATE_MS ) ;
+        ESP_LOGE(TAG, "Failed to read from MCP23008 reg 0x%02x, addr 0x%x, error: %s", reg, mcp->address, esp_err_to_name(ret));
+        // No vTaskDelay here if read failed
+        return ret; // Propagate error
+	}
+    // FIXME: This delay is suspicious. Remove or justify.
+    // A 30ms delay for every I2C read register operation is unusually long for MCP23008.
+    // vTaskDelay ( 30 / portTICK_RATE_MS ) ; 
 
-    return ESP_OK ;
+    return ret ; // Return the status from i2c_manager_read
 }
 
 // --------------------------------------------------------------------
@@ -60,14 +65,14 @@ static esp_err_t mcp23008_read_reg ( mcp23008_t *mcp, uint8_t reg, uint8_t *d )
 static esp_err_t mcp23008_write_reg ( mcp23008_t *mcp, uint8_t reg, uint8_t d )
 {
     CHECK_ARG (mcp) ;
+    // For i2c_manager_write, the buffer is const uint8_t*, so passing &d (address of the byte value) is correct.
 	esp_err_t ret = i2c_manager_write ( mcp -> port, mcp -> address, reg, &d, 1 ) ;
 
 	if ( ret != ESP_OK ) 
 	{
-        ESP_LOGE ( TAG, "Error writing register %d", reg ) ;
-        return ESP_FAIL ;
-    }
-    return ESP_OK ;
+        ESP_LOGE(TAG, "Failed to write to MCP23008 reg 0x%02x, addr 0x%x, value 0x%02x, error: %s", reg, mcp->address, d, esp_err_to_name(ret));
+	}
+    return ret ; // Propagate error or success
 }
 
 // --------------------------------------------------------------------
@@ -83,11 +88,7 @@ esp_err_t mcp23008_init ( mcp23008_t *mcp )
 esp_err_t mcp23008_read_port ( mcp23008_t *mcp, uint8_t *d )
 {
     esp_err_t ret = mcp23008_read_reg ( mcp, MCP23008_GPIO, d ) ;
-    if ( ret == ESP_OK ) 
-    {
-        mcp -> current = *d ;
-        return ESP_OK ;
-    }
+    // Removed empty if (ret == ESP_OK) block
     return ret ;
 }
 
@@ -96,11 +97,7 @@ esp_err_t mcp23008_read_port ( mcp23008_t *mcp, uint8_t *d )
 esp_err_t mcp23008_write_port ( mcp23008_t *mcp, uint8_t d )
 {
     esp_err_t ret = mcp23008_write_reg ( mcp, MCP23008_GPIO, d ) ;
-    if ( ret == ESP_OK ) 
-    {
-        mcp -> current = d ;
-        return ESP_OK ;
-    }
+    // Removed empty if (ret == ESP_OK) block
     return ret ;
 }
 
@@ -171,6 +168,8 @@ esp_err_t mcp23008_read_interrupt_reg ( mcp23008_t *mcp, uint8_t *intr )
 
 esp_err_t mcp23008_read_interrupt_capture ( mcp23008_t *mcp, uint8_t *intr )
 {
+    CHECK_ARG(mcp);
+    CHECK_ARG(intr);
     return mcp23008_read_reg ( mcp, MCP23008_INTCAP, intr ) ;
 }
 
@@ -178,6 +177,7 @@ esp_err_t mcp23008_read_interrupt_capture ( mcp23008_t *mcp, uint8_t *intr )
 
 esp_err_t mcp23008_set_output_latch ( mcp23008_t *mcp, uint8_t olat )
 {
+    CHECK_ARG(mcp);
     return mcp23008_write_reg ( mcp, MCP23008_OLAT, olat ) ;
 }
 
@@ -185,6 +185,8 @@ esp_err_t mcp23008_set_output_latch ( mcp23008_t *mcp, uint8_t olat )
 
 esp_err_t mcp23008_read_output_latch ( mcp23008_t *mcp, uint8_t *olat )
 {
+    CHECK_ARG(mcp);
+    CHECK_ARG(olat);
     return mcp23008_read_reg ( mcp, MCP23008_OLAT, olat ) ;
 }
 
@@ -192,6 +194,7 @@ esp_err_t mcp23008_read_output_latch ( mcp23008_t *mcp, uint8_t *olat )
 
 esp_err_t mcp23008_set_pullups ( mcp23008_t *mcp, uint8_t pu )
 {
+    CHECK_ARG(mcp);
     return mcp23008_write_reg ( mcp, MCP23008_GPPU, pu ) ;
 }
 
@@ -199,6 +202,8 @@ esp_err_t mcp23008_set_pullups ( mcp23008_t *mcp, uint8_t pu )
 
 esp_err_t mcp23008_read_pullups ( mcp23008_t *mcp, uint8_t *pu )
 {
+    CHECK_ARG(mcp);
+    CHECK_ARG(pu);
     return mcp23008_read_reg ( mcp, MCP23008_GPPU, pu ) ;
 }
 
@@ -206,24 +211,75 @@ esp_err_t mcp23008_read_pullups ( mcp23008_t *mcp, uint8_t *pu )
 
 esp_err_t mcp23008_port_set_bit ( mcp23008_t *mcp, uint8_t b )
 {
-    mcp -> current |= ( 1 << b ) ;
-    return mcp23008_write_port ( mcp, mcp -> current ) ;
+    CHECK_ARG(mcp);
+    if (b > 7) {
+        ESP_LOGE(TAG, "Invalid bit number %d for set_bit", b);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t current_olat;
+    esp_err_t ret = mcp23008_read_output_latch(mcp, &current_olat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read OLAT before set_bit for bit %d, addr 0x%x, error: %s", b, mcp->address, esp_err_to_name(ret));
+        return ret;
+    }
+
+    current_olat |= (1 << b);
+    ret = mcp23008_set_output_latch(mcp, current_olat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write OLAT after set_bit for bit %d, addr 0x%x, error: %s", b, mcp->address, esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 // --------------------------------------------------------------------
 
 esp_err_t mcp23008_port_clear_bit ( mcp23008_t *mcp, uint8_t b )
 {
-    mcp -> current &= ~( 1 << b ) ;
-    return mcp23008_write_port ( mcp, mcp -> current ) ;
+    CHECK_ARG(mcp);
+    if (b > 7) {
+        ESP_LOGE(TAG, "Invalid bit number %d for clear_bit", b);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t current_olat;
+    esp_err_t ret = mcp23008_read_output_latch(mcp, &current_olat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read OLAT before clear_bit for bit %d, addr 0x%x, error: %s", b, mcp->address, esp_err_to_name(ret));
+        return ret;
+    }
+
+    current_olat &= ~(1 << b);
+    ret = mcp23008_set_output_latch(mcp, current_olat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write OLAT after clear_bit for bit %d, addr 0x%x, error: %s", b, mcp->address, esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 // --------------------------------------------------------------------
 
 esp_err_t mcp23008_toggle_bit ( mcp23008_t *mcp, uint8_t b )
 {
-    mcp -> current ^= ( 1 << b ) ;
-    return mcp23008_write_port ( mcp, mcp -> current ) ; 
+    CHECK_ARG(mcp);
+    if (b > 7) {
+        ESP_LOGE(TAG, "Invalid bit number %d for toggle_bit", b);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint8_t current_olat;
+    esp_err_t ret = mcp23008_read_output_latch(mcp, &current_olat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read OLAT before toggle_bit for bit %d, addr 0x%x, error: %s", b, mcp->address, esp_err_to_name(ret));
+        return ret;
+    }
+
+    current_olat ^= (1 << b);
+    ret = mcp23008_set_output_latch(mcp, current_olat);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to write OLAT after toggle_bit for bit %d, addr 0x%x, error: %s", b, mcp->address, esp_err_to_name(ret));
+    }
+    return ret;
 }
 
 
